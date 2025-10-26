@@ -27,6 +27,8 @@ async function setupDatabase() {
     });
     console.log('Стартовый триггер "тест" добавлен в базу данных.');
   }
+  
+  return db;
 }
 
 async function addTrigger({ phrase, reply, dm }) {
