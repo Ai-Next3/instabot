@@ -1,14 +1,19 @@
 const sqlite3 = require('sqlite3');
 const { open } = require('sqlite');
+const fs = require('fs');
 
 let db;
 
 async function setupDatabase() {
+  const dbPath = './database.sqlite';
+  const dbExists = fs.existsSync(dbPath);
+
   db = await open({
-    filename: './database.sqlite',
+    filename: dbPath,
     driver: sqlite3.Database
   });
 
+  // Создаём таблицу если её нет
   await db.exec(`
     CREATE TABLE IF NOT EXISTS triggers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18,14 +23,19 @@ async function setupDatabase() {
     )
   `);
 
-  const count = await db.get('SELECT COUNT(id) as count FROM triggers');
-  if (count.count === 0) {
-    await addTrigger({
-      phrase: 'тест',
-      reply: 'Это тестовый ответ на коммент.',
-      dm: 'Это тестовое сообщение в личку.'
-    });
-    console.log('Стартовый триггер "тест" добавлен в базу данных.');
+  // Добавляем стартовый триггер ТОЛЬКО если БД была новая
+  if (!dbExists) {
+    const count = await db.get('SELECT COUNT(id) as count FROM triggers');
+    if (count.count === 0) {
+      await addTrigger({
+        phrase: 'тест',
+        reply: 'Это тестовый ответ на коммент.',
+        dm: 'Это тестовое сообщение в личку.'
+      });
+      console.log('Стартовый триггер "тест" добавлен в базу данных.');
+    }
+  } else {
+    console.log('БД уже существует. Данные сохранены.');
   }
   
   return db;

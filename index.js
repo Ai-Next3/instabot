@@ -90,11 +90,24 @@ app.post(WEBHOOK_PATH, async (req, res) => {
     const fromId = messageData.from?.id;
     const quickReply = messageData.quick_reply;
 
+    console.log('Сообщение от пользователя:', JSON.stringify(messageData, null, 2));
+
     // Проверяем, нажал ли пользователь на кнопку подтверждения confirm_
-    if (quickReply?.payload?.startsWith('confirm_') && fromId) {
+    if ((quickReply?.payload?.startsWith('confirm_') || messageText === 'да') && fromId) {
       try {
-        // Извлекаем ID триггера из payload
-        const triggerId = parseInt(quickReply.payload.split('_')[1]);
+        let triggerId;
+        
+        // Если есть quickReply с payload
+        if (quickReply?.payload?.startsWith('confirm_')) {
+          triggerId = parseInt(quickReply.payload.split('_')[1]);
+          console.log(`Нажата кнопка с payload: confirm_${triggerId}`);
+        } else if (messageText === 'да') {
+          // Если просто написал "Да" - это запасной вариант, но нам нужно как-то определить триггер
+          // Пока пропускаем, так как нет информации о триггере
+          console.log('Пользователь написал "Да", но нет информации о триггере');
+          return;
+        }
+
         const selectedTrigger = await db.get('SELECT * FROM triggers WHERE id = ?', triggerId);
         
         if (selectedTrigger) {
@@ -108,10 +121,12 @@ app.post(WEBHOOK_PATH, async (req, res) => {
             }, 
             { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
           );
-          console.log(`Успешно отправили информацию триггера пользователю ${fromId} (ID: ${triggerId})`);
+          console.log(`✅ Успешно отправили информацию триггера пользователю ${fromId} (ID: ${triggerId})`);
+        } else {
+          console.log(`❌ Триггер с ID ${triggerId} не найден в БД`);
         }
       } catch (error) {
-        console.error('Ошибка при отправке информации триггера:', error.response ? error.response.data : error.message);
+        console.error('❌ Ошибка при отправке информации триггера:', error.response ? error.response.data : error.message);
       }
     }
   }
