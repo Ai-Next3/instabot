@@ -68,7 +68,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
                 {
                   content_type: 'text',
                   title: 'Получить ссылку',
-                  payload: 'get_bot_link'
+                  payload: `get_bot_link_${trigger.id}`
                 }
               ]
             },
@@ -76,7 +76,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
           }, 
           { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
         );
-        console.log(`Успешно отправили личное сообщение для триггера "${commentText}"`);
+        console.log(`Успешно отправили личное сообщение для триггера "${commentText}" (ID: ${trigger.id})`);
       } catch (error) {
         console.error('Ошибка при отправке ответа:', error.response ? error.response.data : error.message);
       }
@@ -90,19 +90,25 @@ app.post(WEBHOOK_PATH, async (req, res) => {
     const fromId = messageData.from?.id;
     const quickReply = messageData.quick_reply;
 
-    // Проверяем, нажал ли пользователь на кнопку quick_reply с payload 'get_bot_link'
-    if (quickReply?.payload === 'get_bot_link' && fromId) {
+    // Проверяем, нажал ли пользователь на кнопку quick_reply с payload содержащим 'get_bot_link'
+    if (quickReply?.payload?.startsWith('get_bot_link_') && fromId) {
       try {
-        // Отправляем основное сообщение со ссылкой на бота
-        const linkMessage = 'Отлично! Вот твоя ссылка на бота с промокодом:\n\nhttps://t.me/zakon3_bot?start=unlimited7';
-        await axios.post(`https://graph.instagram.com/v21.0/me/messages`, 
-          { 
-            recipient: { id: fromId }, 
-            message: { text: linkMessage }
-          }, 
-          { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
-        );
-        console.log(`Успешно отправили ссылку пользователю ${fromId}`);
+        // Извлекаем ID триггера из payload
+        const triggerId = parseInt(quickReply.payload.split('_')[3]);
+        const selectedTrigger = await db.get('SELECT * FROM triggers WHERE id = ?', triggerId);
+        
+        if (selectedTrigger) {
+          // Отправляем финальное сообщение со ссылкой на бота
+          const linkMessage = `${selectedTrigger.direct_message}\n\nВот твоя персональная ссылка:\nhttps://t.me/zakon3_bot?start=unlimited7`;
+          await axios.post(`https://graph.instagram.com/v21.0/me/messages`, 
+            { 
+              recipient: { id: fromId }, 
+              message: { text: linkMessage }
+            }, 
+            { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
+          );
+          console.log(`Успешно отправили ссылку пользователю ${fromId} для триггера ID: ${triggerId}`);
+        }
       } catch (error) {
         console.error('Ошибка при отправке ссылки:', error.response ? error.response.data : error.message);
       }
