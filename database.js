@@ -6,6 +6,12 @@ let db;
 
 async function setupDatabase() {
   const dbPath = './data/database.sqlite';
+  
+  // Создаём директорию если её нет
+  if (!fs.existsSync('./data')) {
+    fs.mkdirSync('./data', { recursive: true });
+  }
+  
   const dbExists = fs.existsSync(dbPath);
 
   db = await open({
