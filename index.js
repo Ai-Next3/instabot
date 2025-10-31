@@ -38,13 +38,13 @@ app.post(WEBHOOK_PATH, async (req, res) => {
   res.sendStatus(200); // Сразу отвечаем Instagram, что все ОК
 
   const entry = req.body.entry?.[0];
-  const change = entry?.changes?.[0];
-
-  // Обработка комментариев
-  if (change?.field === 'comments') {
-    const commentText = change.value.text.toLowerCase();
-    const commentId = change.value.id;
-    const fromId = change.value.from.id;
+  
+  // ===== ОБРАБОТКА КОММЕНТАРИЕВ =====
+  const commentChange = entry?.changes?.find(c => c.field === 'comments');
+  if (commentChange) {
+    const commentText = commentChange.value.text.toLowerCase();
+    const commentId = commentChange.value.id;
+    const fromId = commentChange.value.from.id;
 
     const trigger = await db.get('SELECT * FROM triggers WHERE trigger_phrase = ?', commentText);
 
@@ -87,71 +87,77 @@ app.post(WEBHOOK_PATH, async (req, res) => {
     }
   }
 
-  // Обработка входящих сообщений от пользователей
-  if (change?.field === 'messages') {
-    const messageData = change.value;
-    
-    // Пропускаем наши собственные сообщения (echo)
-    if (messageData.is_echo) {
-      console.log('Это наше отправленное сообщение, пропускаем.');
-      return;
-    }
+  // ===== ОБРАБОТКА ВХОДЯЩИХ СООБЩЕНИЙ =====
+  if (entry?.messaging) {
+    for (const messaging of entry.messaging) {
+      // Пропускаем наши собственные сообщения (is_echo)
+      if (messaging.message?.is_echo) {
+        console.log('Это наше отправленное сообщение, пропускаем.');
+        continue;
+      }
 
-    const messageText = messageData.text?.toLowerCase();
-    const fromId = messageData.from?.id;
-    const quickReply = messageData.quick_reply;
+      // Пропускаем эвенты read/delivery
+      if (!messaging.message) {
+        console.log('Событие не связано с сообщением (read/delivery), пропускаем.');
+        continue;
+      }
 
-    console.log('📨 Входящее сообщение от пользователя:', JSON.stringify(messageData, null, 2));
+      const messageText = messaging.message.text?.toLowerCase();
+      const fromId = messaging.sender?.id;
+      const quickReply = messaging.message.quick_reply;
 
-    // Проверяем, нажал ли пользователь на кнопку подтверждения confirm_
-    if ((quickReply?.payload?.startsWith('confirm_') || messageText === 'да') && fromId) {
-      try {
-        let triggerId;
+      console.log('📨 Входящее сообщение от пользователя:', JSON.stringify(messaging, null, 2));
 
-        // Если есть quickReply с payload
-        if (quickReply?.payload?.startsWith('confirm_')) {
-          triggerId = parseInt(quickReply.payload.split('_')[1]);
-          console.log(`👇 Нажата кнопка с payload: confirm_${triggerId}`);
-        } else if (messageText === 'да') {
-          // Если просто написал "Да" - ищем последний триггер для этого пользователя
-          console.log('🔍 Пользователь написал "Да", ищем последний триггер...');
-          const lastConfirmation = await db.get(
-            'SELECT trigger_id FROM user_confirmations WHERE user_id = ? AND info_sent = 0 ORDER BY created_at DESC LIMIT 1',
-            fromId
-          );
-          
-          if (lastConfirmation) {
-            triggerId = lastConfirmation.trigger_id;
-            console.log(`✅ Найден триггер ID: ${triggerId}`);
-          } else {
-            console.log('❌ Не найден ни один подтвержденный триггер');
-            return;
+      // Проверяем, нажал ли пользователь на кнопку подтверждения confirm_
+      if ((quickReply?.payload?.startsWith('confirm_') || messageText === 'да') && fromId) {
+        try {
+          let triggerId;
+
+          // Если есть quickReply с payload
+          if (quickReply?.payload?.startsWith('confirm_')) {
+            triggerId = parseInt(quickReply.payload.split('_')[1]);
+            console.log(`👇 Нажата кнопка с payload: confirm_${triggerId}`);
+          } else if (messageText === 'да') {
+            // Если просто написал "Да" - ищем последний триггер для этого пользователя
+            console.log('🔍 Пользователь написал "Да", ищем последний триггер...');
+            const lastConfirmation = await db.get(
+              'SELECT trigger_id FROM user_confirmations WHERE user_id = ? AND info_sent = 0 ORDER BY created_at DESC LIMIT 1',
+              fromId
+            );
+            
+            if (lastConfirmation) {
+              triggerId = lastConfirmation.trigger_id;
+              console.log(`✅ Найден триггер ID: ${triggerId}`);
+            } else {
+              console.log('❌ Не найден ни один подтвержденный триггер');
+              continue;
+            }
           }
-        }
 
-        const selectedTrigger = await db.get('SELECT * FROM triggers WHERE id = ?', triggerId);
+          const selectedTrigger = await db.get('SELECT * FROM triggers WHERE id = ?', triggerId);
 
-        if (selectedTrigger) {
-          // Отправляем основную информацию триггера (обычным сообщением, не reply)
-          await axios.post(`https://graph.instagram.com/v21.0/me/messages`,
-            {
-              recipient: { id: fromId },
-              message: {
-                text: selectedTrigger.direct_message
-              }
-            },
-            { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
-          );
-          
-          // Помечаем информацию как отправленную
-          await markInfoAsSent(fromId, triggerId);
-          
-          console.log(`✅ Информация триггера отправлена пользователю ${fromId} (ID: ${triggerId})`);
-        } else {
-          console.log(`❌ Триггер с ID ${triggerId} не найден в БД`);
+          if (selectedTrigger) {
+            // Отправляем основную информацию триггера (обычным сообщением, не reply)
+            await axios.post(`https://graph.instagram.com/v21.0/me/messages`,
+              {
+                recipient: { id: fromId },
+                message: {
+                  text: selectedTrigger.direct_message
+                }
+              },
+              { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
+            );
+            
+            // Помечаем информацию как отправленную
+            await markInfoAsSent(fromId, triggerId);
+            
+            console.log(`✅ Информация триггера отправлена пользователю ${fromId} (ID: ${triggerId})`);
+          } else {
+            console.log(`❌ Триггер с ID ${triggerId} не найден в БД`);
+          }
+        } catch (error) {
+          console.error('❌ Ошибка при отправке информации триггера:', error.response ? error.response.data : error.message);
         }
-      } catch (error) {
-        console.error('❌ Ошибка при отправке информации триггера:', error.response ? error.response.data : error.message);
       }
     }
   }
