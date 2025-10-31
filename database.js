@@ -23,6 +23,18 @@ async function setupDatabase() {
     )
   `);
 
+  // Таблица для отслеживания подтверждений пользователей
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS user_confirmations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      trigger_id INTEGER NOT NULL,
+      info_sent BOOLEAN DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, trigger_id)
+    )
+  `);
+
   // Добавляем стартовый триггер ТОЛЬКО если БД была новая
   if (!dbExists) {
     const count = await db.get('SELECT COUNT(id) as count FROM triggers');
@@ -71,6 +83,40 @@ async function updateTrigger(id, field, value) {
     return db.run(`UPDATE triggers SET ${field} = ? WHERE id = ?`, finalValue, id);
 }
 
+async function createOrGetConfirmation(userId, triggerId) {
+  try {
+    const existing = await db.get(
+      'SELECT * FROM user_confirmations WHERE user_id = ? AND trigger_id = ?',
+      userId, triggerId
+    );
+    
+    if (!existing) {
+      await db.run(
+        'INSERT INTO user_confirmations (user_id, trigger_id, info_sent) VALUES (?, ?, 0)',
+        userId, triggerId
+      );
+    }
+    
+    return existing || { user_id: userId, trigger_id: triggerId, info_sent: 0 };
+  } catch (error) {
+    console.error('Ошибка при создании подтверждения:', error.message);
+  }
+}
+
+async function markInfoAsSent(userId, triggerId) {
+  return db.run(
+    'UPDATE user_confirmations SET info_sent = 1 WHERE user_id = ? AND trigger_id = ?',
+    userId, triggerId
+  );
+}
+
+async function getConfirmation(userId, triggerId) {
+  return db.get(
+    'SELECT * FROM user_confirmations WHERE user_id = ? AND trigger_id = ?',
+    userId, triggerId
+  );
+}
+
 
 module.exports = { 
     setupDatabase,
@@ -78,5 +124,8 @@ module.exports = {
     getAllTriggers,
     getTriggerById,
     deleteTrigger,
-    updateTrigger
+    updateTrigger,
+    createOrGetConfirmation,
+    markInfoAsSent,
+    getConfirmation
 };

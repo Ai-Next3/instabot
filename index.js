@@ -1,7 +1,7 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const axios = require('axios');
-const { setupDatabase } = require('./database.js'); 
+const { setupDatabase, createOrGetConfirmation, markInfoAsSent, getConfirmation } = require('./database.js');
 const setupTelegramBot = require('./bot_admin.js');
 
 dotenv.config();
@@ -51,17 +51,21 @@ app.post(WEBHOOK_PATH, async (req, res) => {
     if (trigger) {
       try {
         // Ответ на коммент с кнопкой
-        await axios.post(`https://graph.instagram.com/v21.0/${commentId}/replies`, 
+        await axios.post(`https://graph.instagram.com/v21.0/${commentId}/replies`,
           { message: trigger.comment_reply },
           { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
         );
         console.log(`Успешно ответили на комментарий с триггером "${commentText}"`);
-        
+
+        // Сохраняем подтверждение в БД
+        await createOrGetConfirmation(fromId, trigger.id);
+        console.log(`✅ Подтверждение создано для пользователя ${fromId}, триггер ID: ${trigger.id}`);
+
         // Первое сообщение в личку - запрашиваем согласие с кнопкой "Да"
         const userProfile = await axios.get(`https://graph.instagram.com/v21.0/${fromId}?fields=id`, { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } });
-        await axios.post(`https://graph.instagram.com/v21.0/me/messages`, 
-          { 
-            recipient: { id: userProfile.data.id }, 
+        await axios.post(`https://graph.instagram.com/v21.0/me/messages`,
+          {
+            recipient: { id: userProfile.data.id },
             message: {
               text: `Йоу, увидел твой коммент 👀\n\nЧтобы получить информацию нажми кнопку "Да" ниже или напиши "Да" в ответ на это сообщение.`,
               quick_replies: [
@@ -73,7 +77,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
               ]
             },
             messaging_type: 'RESPONSE'
-          }, 
+          },
           { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
         );
         console.log(`Успешно отправили запрос подтверждения для триггера "${commentText}" (ID: ${trigger.id})`);
@@ -86,42 +90,63 @@ app.post(WEBHOOK_PATH, async (req, res) => {
   // Обработка входящих сообщений от пользователей
   if (change?.field === 'messages') {
     const messageData = change.value;
+    
+    // Пропускаем наши собственные сообщения (echo)
+    if (messageData.is_echo) {
+      console.log('Это наше отправленное сообщение, пропускаем.');
+      return;
+    }
+
     const messageText = messageData.text?.toLowerCase();
     const fromId = messageData.from?.id;
     const quickReply = messageData.quick_reply;
 
-    console.log('Сообщение от пользователя:', JSON.stringify(messageData, null, 2));
+    console.log('📨 Входящее сообщение от пользователя:', JSON.stringify(messageData, null, 2));
 
     // Проверяем, нажал ли пользователь на кнопку подтверждения confirm_
     if ((quickReply?.payload?.startsWith('confirm_') || messageText === 'да') && fromId) {
       try {
         let triggerId;
-        
+
         // Если есть quickReply с payload
         if (quickReply?.payload?.startsWith('confirm_')) {
           triggerId = parseInt(quickReply.payload.split('_')[1]);
-          console.log(`Нажата кнопка с payload: confirm_${triggerId}`);
+          console.log(`👇 Нажата кнопка с payload: confirm_${triggerId}`);
         } else if (messageText === 'да') {
-          // Если просто написал "Да" - это запасной вариант, но нам нужно как-то определить триггер
-          // Пока пропускаем, так как нет информации о триггере
-          console.log('Пользователь написал "Да", но нет информации о триггере');
-          return;
+          // Если просто написал "Да" - ищем последний триггер для этого пользователя
+          console.log('🔍 Пользователь написал "Да", ищем последний триггер...');
+          const lastConfirmation = await db.get(
+            'SELECT trigger_id FROM user_confirmations WHERE user_id = ? AND info_sent = 0 ORDER BY created_at DESC LIMIT 1',
+            fromId
+          );
+          
+          if (lastConfirmation) {
+            triggerId = lastConfirmation.trigger_id;
+            console.log(`✅ Найден триггер ID: ${triggerId}`);
+          } else {
+            console.log('❌ Не найден ни один подтвержденный триггер');
+            return;
+          }
         }
 
         const selectedTrigger = await db.get('SELECT * FROM triggers WHERE id = ?', triggerId);
-        
+
         if (selectedTrigger) {
-          // Отправляем основную информацию триггера
-          await axios.post(`https://graph.instagram.com/v21.0/me/messages`, 
-            { 
-              recipient: { id: fromId }, 
+          // Отправляем основную информацию триггера (обычным сообщением, не reply)
+          await axios.post(`https://graph.instagram.com/v21.0/me/messages`,
+            {
+              recipient: { id: fromId },
               message: {
                 text: selectedTrigger.direct_message
               }
-            }, 
+            },
             { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
           );
-          console.log(`✅ Успешно отправили информацию триггера пользователю ${fromId} (ID: ${triggerId})`);
+          
+          // Помечаем информацию как отправленную
+          await markInfoAsSent(fromId, triggerId);
+          
+          console.log(`✅ Информация триггера отправлена пользователю ${fromId} (ID: ${triggerId})`);
         } else {
           console.log(`❌ Триггер с ID ${triggerId} не найден в БД`);
         }
@@ -144,9 +169,9 @@ app.post('/tlg/webhook', (req, res) => {
 async function startApp() {
   db = await setupDatabase();
   console.log('База данных успешно подключена.');
-  
+
   telegramAdmin = setupTelegramBot(db); // Инициализируем Telegram-бота
-  
+
   app.listen(PORT, () => {
     console.log(`Сервер запущен на порту ${PORT}. Слушает Instagram и Telegram.`);
   });
