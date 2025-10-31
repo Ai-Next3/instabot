@@ -40,6 +40,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
   const entry = req.body.entry?.[0];
   const change = entry?.changes?.[0];
 
+  // Обработка комментариев
   if (change?.field === 'comments') {
     const commentText = change.value.text.toLowerCase();
     const commentId = change.value.id;
@@ -49,22 +50,61 @@ app.post(WEBHOOK_PATH, async (req, res) => {
 
     if (trigger) {
       try {
-        // Ответ на коммент
+        // Ответ на коммент с кнопкой
         await axios.post(`https://graph.instagram.com/v21.0/${commentId}/replies`, 
           { message: trigger.comment_reply },
           { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
         );
         console.log(`Успешно ответили на комментарий с триггером "${commentText}"`);
         
-        // Сообщение в личку
+        // Отправляем первое сообщение в личку с кнопкой quick_reply
         const userProfile = await axios.get(`https://graph.instagram.com/v21.0/${fromId}?fields=id`, { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } });
         await axios.post(`https://graph.instagram.com/v21.0/me/messages`, 
-          { recipient: { id: userProfile.data.id }, message: { text: trigger.direct_message }, messaging_type: 'RESPONSE' }, 
+          { 
+            recipient: { id: userProfile.data.id }, 
+            message: {
+              text: trigger.direct_message,
+              quick_replies: [
+                {
+                  content_type: 'text',
+                  title: 'Получить ссылку',
+                  payload: 'get_bot_link'
+                }
+              ]
+            },
+            messaging_type: 'RESPONSE'
+          }, 
           { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
         );
         console.log(`Успешно отправили личное сообщение для триггера "${commentText}"`);
       } catch (error) {
         console.error('Ошибка при отправке ответа:', error.response ? error.response.data : error.message);
+      }
+    }
+  }
+
+  // Обработка входящих сообщений от пользователей
+  if (change?.field === 'messages') {
+    const messageData = change.value;
+    const messageText = messageData.text?.toLowerCase();
+    const fromId = messageData.from?.id;
+    const quickReply = messageData.quick_reply;
+
+    // Проверяем, нажал ли пользователь на кнопку quick_reply с payload 'get_bot_link'
+    if (quickReply?.payload === 'get_bot_link' && fromId) {
+      try {
+        // Отправляем основное сообщение со ссылкой на бота
+        const linkMessage = 'Отлично! Вот твоя ссылка на бота с промокодом:\n\nhttps://t.me/zakon3_bot?start=unlimited7';
+        await axios.post(`https://graph.instagram.com/v21.0/me/messages`, 
+          { 
+            recipient: { id: fromId }, 
+            message: { text: linkMessage }
+          }, 
+          { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
+        );
+        console.log(`Успешно отправили ссылку пользователю ${fromId}`);
+      } catch (error) {
+        console.error('Ошибка при отправке ссылки:', error.response ? error.response.data : error.message);
       }
     }
   }
