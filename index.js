@@ -57,18 +57,18 @@ app.post(WEBHOOK_PATH, async (req, res) => {
         );
         console.log(`Успешно ответили на комментарий с триггером "${commentText}"`);
         
-        // Отправляем первое сообщение в личку с кнопкой quick_reply
+        // Первое сообщение в личку - запрашиваем согласие с кнопкой "Да"
         const userProfile = await axios.get(`https://graph.instagram.com/v21.0/${fromId}?fields=id`, { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } });
         await axios.post(`https://graph.instagram.com/v21.0/me/messages`, 
           { 
             recipient: { id: userProfile.data.id }, 
             message: {
-              text: trigger.direct_message,
+              text: `Йоу, увидел твой коммент 👀\n\nЧтобы получить информацию нажми кнопку "Да" ниже или напиши "Да" в ответ на это сообщение.`,
               quick_replies: [
                 {
                   content_type: 'text',
-                  title: 'Получить ссылку',
-                  payload: `get_bot_link_${trigger.id}`
+                  title: 'Да',
+                  payload: `confirm_${trigger.id}`
                 }
               ]
             },
@@ -76,7 +76,7 @@ app.post(WEBHOOK_PATH, async (req, res) => {
           }, 
           { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
         );
-        console.log(`Успешно отправили личное сообщение для триггера "${commentText}" (ID: ${trigger.id})`);
+        console.log(`Успешно отправили запрос подтверждения для триггера "${commentText}" (ID: ${trigger.id})`);
       } catch (error) {
         console.error('Ошибка при отправке ответа:', error.response ? error.response.data : error.message);
       }
@@ -90,27 +90,28 @@ app.post(WEBHOOK_PATH, async (req, res) => {
     const fromId = messageData.from?.id;
     const quickReply = messageData.quick_reply;
 
-    // Проверяем, нажал ли пользователь на кнопку quick_reply с payload содержащим 'get_bot_link'
-    if (quickReply?.payload?.startsWith('get_bot_link_') && fromId) {
+    // Проверяем, нажал ли пользователь на кнопку подтверждения confirm_
+    if (quickReply?.payload?.startsWith('confirm_') && fromId) {
       try {
         // Извлекаем ID триггера из payload
-        const triggerId = parseInt(quickReply.payload.split('_')[3]);
+        const triggerId = parseInt(quickReply.payload.split('_')[1]);
         const selectedTrigger = await db.get('SELECT * FROM triggers WHERE id = ?', triggerId);
         
         if (selectedTrigger) {
-          // Отправляем финальное сообщение со ссылкой на бота
-          const linkMessage = `${selectedTrigger.direct_message}\n\nВот твоя персональная ссылка:\nhttps://t.me/zakon3_bot?start=unlimited7`;
+          // Отправляем основную информацию триггера
           await axios.post(`https://graph.instagram.com/v21.0/me/messages`, 
             { 
               recipient: { id: fromId }, 
-              message: { text: linkMessage }
+              message: {
+                text: selectedTrigger.direct_message
+              }
             }, 
             { headers: { Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}` } }
           );
-          console.log(`Успешно отправили ссылку пользователю ${fromId} для триггера ID: ${triggerId}`);
+          console.log(`Успешно отправили информацию триггера пользователю ${fromId} (ID: ${triggerId})`);
         }
       } catch (error) {
-        console.error('Ошибка при отправке ссылки:', error.response ? error.response.data : error.message);
+        console.error('Ошибка при отправке информации триггера:', error.response ? error.response.data : error.message);
       }
     }
   }
