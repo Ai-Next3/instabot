@@ -5,7 +5,7 @@ const fs = require('fs');
 let db;
 
 async function setupDatabase() {
-  const dbPath = './database.sqlite';
+  const dbPath = './data/database.sqlite';
   const dbExists = fs.existsSync(dbPath);
 
   db = await open({
